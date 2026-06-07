@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+dist-ssr/
+*.local
+*.tsbuildinfo
+
+# reference material — third-party app source (study aid, not ours; do not commit)
+reference/
+stitch/
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# vercel
+.vercel
+
+# firebase emulator
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# test coverage
+coverage/
