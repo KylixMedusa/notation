@@ -1,32 +1,83 @@
 /**
  * AI chart extraction — Vercel serverless function (server-side only).
  *
- * Uses the Sentinel/Medable OpenAI-compatible gateway via LangChain `ChatOpenAI`
- * (same pattern as the sentinel server). The API key + base URL live in env vars and are
- * NEVER shipped to the browser. Gated by a shared passphrase.
+ * Self-contained: imports ONLY from node_modules (Vercel's function builder doesn't bundle
+ * cross-directory `../src` imports, so the schema + prompt are inlined here). The matching
+ * TS types for the frontend live in `src/lib/extractionSchema.ts` — keep the shapes in sync.
  *
- * Request:  POST { image: dataUrl, passphrase: string }
- * Response: { songs: ExtractedSong[] }  (validated with zod)
+ * Uses the OpenAI-compatible LLM gateway via LangChain `ChatOpenAI`. Key + base URL come from
+ * env vars and never reach the browser. Gated by a shared passphrase.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { ExtractionResult, SYSTEM_PROMPT } from "../src/lib/extractionSchema";
+import { z } from "zod";
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // ~8MB data URL cap
+const ExtractedSection = z.object({
+  label: z.string().default("Section"),
+  timeSignature: z.string().default("4/4"),
+  feel: z.enum(["straight", "shuffle", "swing"]).default("straight"),
+  repeatCount: z.number().int().min(1).max(16).default(1),
+  bars: z.array(z.string()).default([]),
+});
+
+const ExtractedSong = z.object({
+  title: z.string().default("Untitled"),
+  subtitle: z.string().optional(),
+  key: z.string().optional(),
+  tempo: z.number().optional(),
+  capo: z.number().optional(),
+  sections: z.array(ExtractedSection).default([]),
+});
+
+const ExtractionResult = z.object({ songs: z.array(ExtractedSong).min(1) });
+
+const SYSTEM_PROMPT = `You transcribe photos/screenshots of guitar chord charts into JSON.
+
+Return ONLY a JSON object of this exact shape (no markdown, no commentary):
+{
+  "songs": [
+    {
+      "title": string,
+      "subtitle": string (optional, e.g. artist),
+      "key": string (optional, e.g. "G major" or "Am"),
+      "tempo": number (optional, BPM),
+      "capo": number (optional),
+      "sections": [
+        {
+          "label": string,
+          "timeSignature": string (e.g. "4/4", "3/4"),
+          "feel": "straight" | "shuffle" | "swing",
+          "repeatCount": number (how many times the whole section repeats; 1 if not noted),
+          "bars": string[]
+        }
+      ]
+    }
+  ]
+}
+
+Rules for "bars": each array entry is ONE bar written as chord shorthand.
+- One chord held a whole bar: "G"
+- Two chords split evenly: "G - Em"
+- Weighted (first chord ~3/4): "G // D"
+- An empty/rest bar: "//"
+- No chord: "N.C."
+Use chord names exactly as written (e.g. "Am7", "D/F#", "Bdim7").
+If a phrase is marked "x2"/"×2", set repeatCount accordingly instead of duplicating bars.
+Detect the time signature and feel (e.g. "shuffle", "swing") from any annotations on the chart.
+If there are multiple distinct charts/songs, return each as a separate entry in "songs".`;
+
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 function stripFences(text: string): string {
   return text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { image, passphrase } = (req.body ?? {}) as { image?: string; passphrase?: string };
 
-  // Passphrase gate (the only auth — keeps the paid endpoint from being hammered).
   if (!process.env.AI_IMPORT_PASSPHRASE || passphrase !== process.env.AI_IMPORT_PASSPHRASE) {
     return res.status(401).json({ error: "Invalid passphrase" });
   }
@@ -71,7 +122,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     return res.status(200).json(parsed.data);
   } catch (e) {
-    const message = e instanceof Error ? e.message : "Extraction failed";
-    return res.status(502).json({ error: message });
+    return res.status(502).json({ error: e instanceof Error ? e.message : "Extraction failed" });
   }
 }
