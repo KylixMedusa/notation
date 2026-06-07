@@ -12,6 +12,9 @@ dist-ssr/
 reference/
 stitch/
 
+# raw icon-generator export (the chosen icons are copied into public/)
+IconKitchen Output*/
+
 # env / secrets
 .env
 .env.local
